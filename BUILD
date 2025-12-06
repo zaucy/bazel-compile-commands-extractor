@@ -1,3 +1,4 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load(":refresh_compile_commands.bzl", "refresh_compile_commands")
 
 # See README.md for interface.
@@ -25,7 +26,31 @@ filegroup(
 # Implementation:
 # If you are looking into the implementation, start with the overview in ImplementationReadme.md.
 
-exports_files(["refresh.template.py", "check_python_version.template.py"])  # For implicit use by the refresh_compile_commands macro, not direct use.
+exports_files([
+    "refresh.cc",
+])
+
+cc_library(
+    name = "refresh_lib",
+    srcs = ["json_utils.cc", "subprocess.cc"],
+    hdrs = ["json_utils.h", "subprocess.h", "refresh.h"],
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    copts = select({
+        "@bazel_tools//src/conditions:windows": ["/std:c++17"],
+        "//conditions:default": ["-std=c++17"],
+    }),
+)
+
+cc_binary(
+    name = "nvcc_clang_diff",
+    srcs = ["nvcc_clang_diff.cc"],
+    deps = [":refresh_lib"],
+    copts = select({
+        "@bazel_tools//src/conditions:windows": ["/std:c++17"],
+        "//conditions:default": ["-std=c++17"],
+    }),
+)
 
 cc_binary(
     name = "print_args",

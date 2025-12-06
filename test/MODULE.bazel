@@ -1,0 +1,9 @@
+module(name = "test_project")
+
+bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+local_path_override(
+    module_name = "hedron_compile_commands",
+    path = "..",
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.14")
