@@ -7,6 +7,47 @@ When `bazel run`, these rules refresh the compile_commands.json in the root of y
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 
+def _opt_transition_impl(settings, attr):
+    return {"//command_line_option:compilation_mode": "opt"}
+
+_opt_transition = transition(
+    implementation = _opt_transition_impl,
+    inputs = [],
+    outputs = ["//command_line_option:compilation_mode"],
+)
+
+def _force_opt_binary_impl(ctx):
+    # Get the executable from the actual binary target
+    actual_binary = ctx.attr.binary[0]
+    executable = actual_binary[DefaultInfo].files_to_run.executable
+
+    # Create a symlink to the actual binary so this rule produces an executable
+    # matching its name.
+    ctx.actions.symlink(
+        output = ctx.outputs.executable,
+        target_file = executable,
+        is_executable = True,
+    )
+
+    # Forward DefaultInfo, replacing the executable with our symlink
+    # and ensuring runfiles are propagated.
+    return [
+        DefaultInfo(
+            executable = ctx.outputs.executable,
+            files = depset([ctx.outputs.executable]),
+            runfiles = actual_binary[DefaultInfo].default_runfiles,
+        )
+    ]
+
+_force_opt_binary = rule(
+    implementation = _force_opt_binary_impl,
+    attrs = {
+        "binary": attr.label(cfg = _opt_transition, executable = True, mandatory = True),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
+    },
+    executable = True,
+)
+
 def refresh_compile_commands(
         name,
         targets = None,
@@ -39,8 +80,10 @@ def refresh_compile_commands(
         **kwargs
     )
 
+    raw_binary_name = name + "_raw"
+    
     cc_binary(
-        name = name,
+        name = raw_binary_name,
         srcs = [
             "@hedron_compile_commands//:refresh.cc",
             config_file,
@@ -54,6 +97,15 @@ def refresh_compile_commands(
             "//conditions:default": ["-std=c++17"],
         }),
         **kwargs
+    )
+
+    _force_opt_binary(
+        name = name,
+        binary = ":" + raw_binary_name,
+        # Forward standard tags/visibility if needed
+        visibility = kwargs.get("visibility"),
+        tags = kwargs.get("tags"),
+        testonly = kwargs.get("testonly"),
     )
 
 def _gen_refresh_config_impl(ctx):
