@@ -1108,6 +1108,62 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
     return entries;
 }
 
+// "Generated files: //external link makes external dependencies work"
+// We create a link to the external directory in the output base to allow clangd to find external headers.
+// This avoids the "execroot trap" where the execroot is wiped/reconfigured on each build.
+// Instead, we point to the accumulating cache in the output base.
+// See ImplementationReadme.md for full reasoning.
+void _ensure_external_workspaces_link_exists() {
+    if (fs::exists("external")) return;
+
+    try {
+        // Resolve target path via bazel-out
+        // bazel-out -> execroot/<workspace>/bazel-out
+        // We want execroot/../external which is output_base/external
+        // So bazel-out/../../../external
+        
+        fs::path bazel_out = "bazel-out";
+        if (!fs::exists(bazel_out)) {
+            // Fallback or error? bazel-out should exist if we are running via bazel.
+            // But maybe the user is running the binary directly?
+            // Try to deduce from execution path?
+            return; 
+        }
+
+        fs::path target = fs::canonical(bazel_out).parent_path().parent_path().parent_path() / "external";
+        
+        if (!fs::exists(target)) {
+             // Try creating it? No, it's managed by Bazel.
+             // Maybe we are in a different structure.
+             return;
+        }
+
+        log_info("Creating link 'external' -> " + target.string());
+
+#ifdef _WIN32
+        // Use mklink /J for junction (no admin required)
+        // fs::create_directory_symlink requires admin or dev mode.
+        auto res = subprocess::Run({"cmd", "/c", "mklink", "/J", "external", target.string()});
+        if (!res.stderr_output.empty()) {
+            log_warning("Failed to create external junction: " + res.stderr_output);
+        }
+#else
+        // relative link is preferred for portability but absolute is easier to resolve.
+        // The python script used relative: bazel-out/../../../external
+        // Let's use relative if possible, but canonical resolved absolute.
+        // fs::create_directory_symlink(target, "external");
+        
+        // Python used: ln -s bazel-out/../../../external .
+        // This relies on bazel-out being a symlink/dir in cwd.
+        // Let's try the exact python logic for non-windows.
+        fs::create_directory_symlink("bazel-out/../../../external", "external");
+#endif
+
+    } catch (const std::exception& e) {
+        log_warning("Could not create external link: " + std::string(e.what()));
+    }
+}
+
 // --- Main ---
 
 int main(int argc, char** argv) {
@@ -1120,8 +1176,7 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Gitignore, External links... (skip implementation for brevity, use system calls if needed)
-        // _ensure_external_workspaces_link_exists();
+        _ensure_external_workspaces_link_exists();
         // _ensure_gitignore_entries_exist();
 
         std::vector<CommandEntry> all_entries;
