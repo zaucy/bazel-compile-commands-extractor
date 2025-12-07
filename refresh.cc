@@ -732,7 +732,8 @@ GetFilesResult _get_files(json_utils::JsonValue& action) {
     }
     
     if (candidates.empty()) {
-        return {{}, {}, {"No compilation source files found in arguments."}};
+	// Leave empty so we don't report this spammy "no sources log"
+        return {{}, {}, {}};
     }
     source_file = candidates[0];
     
@@ -1110,10 +1111,9 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
                     const auto& headers = result.headers;
 
                     if (!result.warnings.empty()) {
-                        // Log warnings from _get_files (No source files found etc)
+                        // forward messages warnings from _get_files (No source files found, compiler warnings, etc.)
                         std::lock_guard<std::mutex> lock(console_mutex);
                         std::cerr << "\33[2K\r"; 
-                        std::cerr << "Warning (action skipped): ";
                         for(const auto& w : result.warnings) std::cerr << w << "\n";
                         std::cerr << std::flush;
                     }
