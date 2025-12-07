@@ -471,10 +471,12 @@ std::string windows_list2cmdline(const std::vector<std::string>& args) {
     return result;
 }
 
-subprocess::RunResult _subprocess_run_spilling_over_to_param_file_if_needed(std::vector<std::string> command, std::map<std::string, std::string> env) {
+subprocess::RunResult _subprocess_run_spilling_over_to_param_file_if_needed(std::vector<std::string> command, std::map<std::string, std::string> env, bool capture_stdout = true) {
+    subprocess::RunOptions options;
+    options.capture_stdout = capture_stdout;
 #ifdef _WIN32
     try {
-        return subprocess::Run(command, env);
+        return subprocess::Run(command, env, options);
     } catch (const std::runtime_error& e) {
         // Crude check for length error, assuming it's mostly length related on Windows
         // Create param file
@@ -487,7 +489,7 @@ subprocess::RunResult _subprocess_run_spilling_over_to_param_file_if_needed(std:
             
             std::vector<std::string> new_cmd = {command[0], "@" + param_file};
             try {
-                auto res = subprocess::Run(new_cmd, env);
+                auto res = subprocess::Run(new_cmd, env, options);
                 fs::remove(param_file);
                 return res;
             } catch (...) {
@@ -498,7 +500,7 @@ subprocess::RunResult _subprocess_run_spilling_over_to_param_file_if_needed(std:
         throw;
     }
 #else
-    return subprocess::Run(command, env);
+    return subprocess::Run(command, env, options);
 #endif
 }
 
@@ -591,10 +593,12 @@ GetHeadersResult _get_headers_gcc(const json_utils::JsonValue& action, const std
 GetHeadersResult _get_headers_msvc(const json_utils::JsonValue& action, const std::string& source_path) {
     auto& args_json = action.as_object().at("arguments").as_array();
     std::vector<std::string> header_cmd;
+    
     for(const auto& v : args_json) header_cmd.push_back(v.string_val);
     
     header_cmd.push_back("/showIncludes");
     header_cmd.push_back("/EP");
+    // header_cmd.push_back("/nologo"); // Assuming it's in args or we don't strictly need it if we filter stderr well.
 
     std::map<std::string, std::string> env;
     if (action.as_object().count("environmentVariables")) {
@@ -613,12 +617,12 @@ GetHeadersResult _get_headers_msvc(const json_utils::JsonValue& action, const st
         env["INCLUDE"] = includes;
     }
 
-    auto res = _subprocess_run_spilling_over_to_param_file_if_needed(header_cmd, env);
+    auto res = _subprocess_run_spilling_over_to_param_file_if_needed(header_cmd, env, false); // Discard stdout!
     
     std::set<std::string> headers;
     std::stringstream ss(res.stderr_output);
     std::string line;
-    // Markers...
+    
     std::vector<std::string> markers = {
         "Note: including file:", "注意: 包含文件: ", "注意: 包含檔案:", "Poznámka: Včetně souboru:",
         "Hinweis: Einlesen der Datei:", "Remarque : inclusion du fichier : ", "Nota: file incluso ",
@@ -626,46 +630,34 @@ GetHeadersResult _get_headers_msvc(const json_utils::JsonValue& action, const st
         "Примечание: включение файла: ", "Not: eklenen dosya: ", "Nota: inclusión del archivo:"
     };
 
-    // Scan for -Xclang and following arg to suppress warnings
-    std::set<std::string> ignored_flags;
-    ignored_flags.insert("-Xclang");
-    for (size_t i = 0; i < header_cmd.size(); ++i) {
-        if (header_cmd[i] == "-Xclang" && i + 1 < header_cmd.size()) {
-            ignored_flags.insert(header_cmd[i+1]);
-        }
-    }
-
-    bool error = false;
+    bool error = (res.return_code != 0); // Python uses exit code ignore? No, it says check=False.
+    // It checks for fatal error C1083 in output.
+    
     std::vector<std::string> error_lines;
+    
     while(std::getline(ss, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (source_path.size() >= line.size() && source_path.find(line) != std::string::npos) continue; // rough check
+        
         bool matched = false;
         for (const auto& marker : markers) {
             if (line.find(marker) == 0) {
                 std::string h = line.substr(marker.size());
-                // trim
                 h.erase(0, h.find_first_not_of(" \t"));
                 headers.insert(h);
                 matched = true;
                 break;
             }
         }
+        
         if (!matched) {
-            if (line.find("D9002 : ignoring unknown option '") != std::string::npos) {
-                 bool ignored = false;
-                 for (const auto& f : ignored_flags) {
-                     if (line.find("'" + f + "'") != std::string::npos) {
-                         ignored = true; 
-                         break; 
-                     }
-                 }
-                 if (ignored) continue;
-            }
-            error_lines.push_back(line);
-            if (line.find("fatal error C1083:") != std::string::npos) error = true;
+             if (line.find(source_path) != std::string::npos) continue; // Filter source filename echo
+             if (line.find("D9002 : ignoring unknown option") != std::string::npos) continue;
+             
+             error_lines.push_back(line);
+             if (line.find("fatal error C1083:") != std::string::npos) error = true;
         }
     }
+    
     return {headers, !error, error_lines};
 }
 

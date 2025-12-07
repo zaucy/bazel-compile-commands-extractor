@@ -20,9 +20,19 @@ struct RunResult {
     std::string stderr_output;
 };
 
+struct RunOptions {
+    bool check = false;
+    bool capture_stdout = true;
+    bool capture_stderr = true;
+};
+
 // Runs a command.
 // If env is empty, inherits current environment.
-// If check is true, throws runtime_error on non-zero return code.
+RunResult Run(const std::vector<std::string>& command, 
+              const std::map<std::string, std::string>& env, 
+              RunOptions options);
+
+// Legacy/Convenience overload
 RunResult Run(const std::vector<std::string>& command, 
               const std::map<std::string, std::string>& env = {}, 
               bool check = false);

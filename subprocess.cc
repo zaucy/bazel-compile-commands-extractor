@@ -34,7 +34,7 @@ void SetStatusCallback(StatusCallback callback) {
 // Windows implementation using CreateProcess
 RunResult Run(const std::vector<std::string>& command, 
               const std::map<std::string, std::string>& env, 
-              bool check) {
+              RunOptions options) {
     if (command.empty()) throw std::runtime_error("Empty command");
 
     // Build command line
@@ -76,11 +76,21 @@ RunResult Run(const std::vector<std::string>& command,
     HANDLE hChildStd_ERR_Rd = NULL;
     HANDLE hChildStd_ERR_Wr = NULL;
 
-    if (!CreatePipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr, &saAttr, 0)) throw std::runtime_error("CreatePipe");
-    if (!SetHandleInformation(hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0)) throw std::runtime_error("SetHandleInformation");
+    if (options.capture_stdout) {
+        if (!CreatePipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr, &saAttr, 0)) throw std::runtime_error("CreatePipe");
+        if (!SetHandleInformation(hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0)) throw std::runtime_error("SetHandleInformation");
+    } else {
+        hChildStd_OUT_Wr = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &saAttr, OPEN_EXISTING, 0, NULL);
+        if (hChildStd_OUT_Wr == INVALID_HANDLE_VALUE) throw std::runtime_error("CreateFile NUL");
+    }
     
-    if (!CreatePipe(&hChildStd_ERR_Rd, &hChildStd_ERR_Wr, &saAttr, 0)) throw std::runtime_error("CreatePipe");
-    if (!SetHandleInformation(hChildStd_ERR_Rd, HANDLE_FLAG_INHERIT, 0)) throw std::runtime_error("SetHandleInformation");
+    if (options.capture_stderr) {
+        if (!CreatePipe(&hChildStd_ERR_Rd, &hChildStd_ERR_Wr, &saAttr, 0)) throw std::runtime_error("CreatePipe");
+        if (!SetHandleInformation(hChildStd_ERR_Rd, HANDLE_FLAG_INHERIT, 0)) throw std::runtime_error("SetHandleInformation");
+    } else {
+        hChildStd_ERR_Wr = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &saAttr, OPEN_EXISTING, 0, NULL);
+        if (hChildStd_ERR_Wr == INVALID_HANDLE_VALUE) throw std::runtime_error("CreateFile NUL");
+    }
 
     STARTUPINFOA siStartInfo;
     memset(&siStartInfo, 0, sizeof(STARTUPINFO));
@@ -140,7 +150,7 @@ RunResult Run(const std::vector<std::string>& command,
         DWORD bytesAvail = 0;
         
         // STDOUT
-        if (PeekNamedPipe(hChildStd_OUT_Rd, NULL, 0, NULL, &bytesAvail, NULL) && bytesAvail > 0) {
+        if (hChildStd_OUT_Rd && PeekNamedPipe(hChildStd_OUT_Rd, NULL, 0, NULL, &bytesAvail, NULL) && bytesAvail > 0) {
             if (ReadFile(hChildStd_OUT_Rd, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) {
                 stdout_str.append(chBuf, dwRead);
                 any_read = true;
@@ -148,7 +158,7 @@ RunResult Run(const std::vector<std::string>& command,
         }
         
         // STDERR
-        if (PeekNamedPipe(hChildStd_ERR_Rd, NULL, 0, NULL, &bytesAvail, NULL) && bytesAvail > 0) {
+        if (hChildStd_ERR_Rd && PeekNamedPipe(hChildStd_ERR_Rd, NULL, 0, NULL, &bytesAvail, NULL) && bytesAvail > 0) {
             if (ReadFile(hChildStd_ERR_Rd, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) {
                 stderr_str.append(chBuf, dwRead);
                 any_read = true;
@@ -192,8 +202,8 @@ RunResult Run(const std::vector<std::string>& command,
 
             if (WaitForSingleObject(piProcInfo.hProcess, 10) != WAIT_TIMEOUT) {
                 // Process finished. Read remaining.
-                while (ReadFile(hChildStd_OUT_Rd, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) stdout_str.append(chBuf, dwRead);
-                while (ReadFile(hChildStd_ERR_Rd, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) stderr_str.append(chBuf, dwRead);
+                while (hChildStd_OUT_Rd && ReadFile(hChildStd_OUT_Rd, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) stdout_str.append(chBuf, dwRead);
+                while (hChildStd_ERR_Rd && ReadFile(hChildStd_ERR_Rd, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) stderr_str.append(chBuf, dwRead);
                 break;
             }
         }
@@ -205,11 +215,11 @@ RunResult Run(const std::vector<std::string>& command,
     GetExitCodeProcess(piProcInfo.hProcess, &exitCode);
     CloseHandle(piProcInfo.hProcess);
     CloseHandle(piProcInfo.hThread);
-    CloseHandle(hChildStd_OUT_Rd);
-    CloseHandle(hChildStd_ERR_Rd);
+    if (hChildStd_OUT_Rd) CloseHandle(hChildStd_OUT_Rd);
+    if (hChildStd_ERR_Rd) CloseHandle(hChildStd_ERR_Rd);
 
     RunResult result{ (int)exitCode, stdout_str, stderr_str };
-    if (check && result.return_code != 0) {
+    if (options.check && result.return_code != 0) {
         throw std::runtime_error("Command failed with return code " + std::to_string(result.return_code) + "\nStderr: " + result.stderr_output);
     }
     return result;
@@ -220,7 +230,7 @@ RunResult Run(const std::vector<std::string>& command,
 // POSIX implementation
 RunResult Run(const std::vector<std::string>& command, 
               const std::map<std::string, std::string>& env, 
-              bool check) {
+              RunOptions options) {
     if (command.empty()) throw std::runtime_error("Empty command");
 
     int pipe_out[2];
@@ -314,7 +324,7 @@ RunResult Run(const std::vector<std::string>& command,
         int return_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
         RunResult result{ return_code, stdout_str, stderr_str };
-        if (check && result.return_code != 0) {
+        if (options.check && result.return_code != 0) {
             throw std::runtime_error("Command failed with return code " + std::to_string(result.return_code) + "\nStderr: " + result.stderr_output);
         }
         return result;
@@ -322,5 +332,13 @@ RunResult Run(const std::vector<std::string>& command,
 }
 
 #endif
+
+RunResult Run(const std::vector<std::string>& command, 
+              const std::map<std::string, std::string>& env, 
+              bool check) {
+    RunOptions options;
+    options.check = check;
+    return Run(command, env, options);
+}
 
 } // namespace subprocess
