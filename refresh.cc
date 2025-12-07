@@ -24,6 +24,7 @@
 namespace fs = std::filesystem;
 
 std::mutex console_mutex;
+bool g_disable_cache = false;
 
 // --- Constants & Globals ---
 
@@ -647,7 +648,7 @@ GetHeadersResult _get_headers(const json_utils::JsonValue& action, const std::st
     std::string actionKey = action.as_object().at("actionKey").string_val;
 
     // Check disk cache
-    if (!output_file.empty()) {
+    if (!g_disable_cache && !output_file.empty()) {
         std::string cache_path = output_file + ".hedron.compile-commands.headers";
         if (fs::exists(cache_path)) {
             try {
@@ -1221,6 +1222,11 @@ void _ensure_external_workspaces_link_exists() {
 // --- Main ---
 
 int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--no-cache") {
+            g_disable_cache = true;
+        }
+    }
     try {
         auto start_time = std::chrono::high_resolution_clock::now();
         // ensure cwd
