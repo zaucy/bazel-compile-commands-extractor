@@ -167,7 +167,27 @@ RunResult Run(const std::vector<std::string>& command,
                  if (executable_name.length() > 1 && executable_name[0] == '"' && executable_name.back() == '"') {
                      executable_name = executable_name.substr(1, executable_name.length() - 2);
                  }
-                 if (g_status_callback) g_status_callback(process_id, "External tool running: " + executable_name);
+                 
+                 std::string description;
+                 if (executable_name == "bazel" && command.size() > 1) {
+                     description = command[1];
+                 } else if (executable_name == "cl" || executable_name == "cl.exe" || executable_name == "clang" || executable_name == "gcc" || executable_name == "emcc" || executable_name == "emcc.bat") {
+                     for (size_t i = 1; i < command.size(); ++i) {
+                         std::string arg = command[i];
+                         if (arg.size() > 2 && arg.find('.') != std::string::npos) {
+                             std::string ext = arg.substr(arg.find_last_of('.'));
+                             if (ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx") {
+                                 description = "compiling " + arg;
+                                 break;
+                             }
+                         }
+                     }
+                 }
+
+                 std::string msg = "\033[90m[subprocess]\033[0m " + executable_name;
+                 if (!description.empty()) msg += " " + description;
+
+                 if (g_status_callback) g_status_callback(process_id, msg);
             }
 
             if (WaitForSingleObject(piProcInfo.hProcess, 10) != WAIT_TIMEOUT) {

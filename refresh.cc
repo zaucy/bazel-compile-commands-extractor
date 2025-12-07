@@ -1174,9 +1174,9 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
             });
                     }
     }
-    std::cerr << std::endl;
     
     // Destructor of pool waits for all.
+    StatusManager::SetStatus(0, "");
     return entries;
 }
 
