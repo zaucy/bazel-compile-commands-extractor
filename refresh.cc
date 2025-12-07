@@ -23,7 +23,54 @@
 
 namespace fs = std::filesystem;
 
-std::mutex console_mutex;
+class StatusManager {
+public:
+    static void Log(const std::string& msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ClearLines();
+        std::cerr << msg << "\n";
+        PrintLines();
+    }
+
+    static void SetStatus(size_t id, const std::string& msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ClearLines();
+        if (msg.empty()) {
+            statuses_.erase(id);
+        } else {
+            statuses_[id] = msg;
+        }
+        PrintLines();
+    }
+
+private:
+    static void ClearLines() {
+        if (last_line_count_ > 0) {
+             for (size_t i = 0; i < last_line_count_; ++i) {
+                 std::cerr << "\33[A"; // Up
+                 std::cerr << "\33[2K\r"; // Clear
+             }
+        }
+    }
+
+    static void PrintLines() {
+        last_line_count_ = 0;
+        for (const auto& kv : statuses_) {
+            std::cerr << kv.second << "\n";
+            last_line_count_++;
+        }
+        std::cerr << std::flush;
+    }
+
+    static std::mutex mutex_;
+    static std::map<size_t, std::string> statuses_;
+    static size_t last_line_count_;
+};
+
+std::mutex StatusManager::mutex_;
+std::map<size_t, std::string> StatusManager::statuses_;
+size_t StatusManager::last_line_count_ = 0;
+
 bool g_disable_cache = false;
 
 // --- Constants & Globals ---
@@ -182,7 +229,9 @@ void log_with_sgr(SGR sgr, const std::string& colored, const std::string& uncolo
         case SGR::FG_YELLOW: code = "\033[0;33m"; break;
         case SGR::FG_BLUE: code = "\033[0;34m"; break;
     }
-    std::cerr << code << colored << "\033[0m" << uncolored << std::endl;
+    std::stringstream ss;
+    ss << code << colored << "\033[0m" << uncolored;
+    StatusManager::Log(ss.str());
 }
 
 void log_error(const std::string& colored, const std::string& uncolored = "") {
@@ -1088,73 +1137,41 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
         size_t total = actions.size();
         for (size_t i = 0; i < actions.size(); ++i) {
             pool.enqueue([&, i] {
-                // Copy action to modify
-                // Since JsonValue is not deep-copy friendly with shared_ptrs in my impl, 
-                // I should probably parse it fresh or handle it carefully.
-                // My JsonValue impl shares data on copy! This is bad for modification.
-                // I need to fix _nvcc_patch to not modify or create a deep copy.
-                // For now, assume single thread access per action node or careful usage.
-                // Actually, _nvcc_patch returns new vector.
-                
-                // We need to extract data from `actions[i]`.
-                // Is it safe? Yes, read only.
-                
-                // But _get_files calls _get_headers which runs subprocesses.
-                
                 try {
-                    // const_cast because _get_files signature took ref, but let's fix that logic.
-                    // We treat input as const.
-                    json_utils::JsonValue action_copy = actions[i]; // Shallow copy
+                    json_utils::JsonValue action_copy = actions[i];
                     
                     auto result = _get_files(action_copy);
                     const auto& sources = result.sources;
                     const auto& headers = result.headers;
 
                     if (!result.warnings.empty()) {
-                        // forward messages warnings from _get_files (No source files found, compiler warnings, etc.)
-                        std::lock_guard<std::mutex> lock(console_mutex);
-                        std::cerr << "\33[2K\r"; 
-                        for(const auto& w : result.warnings) std::cerr << w << "\n";
-                        std::cerr << std::flush;
+                        std::stringstream ss;
+                        ss << "Warning: ";
+                        for(const auto& w : result.warnings) ss << w << "; ";
+                        StatusManager::Log(ss.str());
                     }
                     
-                    if (sources.empty()) { // Skip if no sources found
-                        return; // return from lambda, don't process this action
-                    }
+                    if (sources.empty()) return;
                     
-                    // Get args
                     std::vector<std::string> args;
                     for(const auto& v : action_copy.as_object().at("arguments").as_array()) args.push_back(v.string_val);
                     
-                    // Patch args
                     args = _apple_platform_patch(args);
-                    args = _emscripten_platform_patch(action_copy); // Modifies args based on action env
+                    args = _emscripten_platform_patch(action_copy);
                     args = _all_platform_patch(args);
                     args = _nvcc_patch(args);
     
                     std::lock_guard<std::mutex> lock(entries_mutex);
-                    // We don't handle the "header files already written" logic globally perfectly here without a global set.
-                    // refresh.template.py does:
-                    // header_files_already_written = set()
-                    // for ... in outputs:
-                    //    check set...
-                    
-                    // We can collect all outputs then filter.
                     for (const auto& s : sources) entries.push_back({s, args, workspace_dir});
                     for (const auto& h : headers) entries.push_back({h, args, workspace_dir});
-                                                    } catch (const std::exception& e) {
-                                                         std::lock_guard<std::mutex> lock(console_mutex);
-                                                         std::cerr << "\33[2K\r";
-                                                         std::cerr << "Exception in worker: " << e.what() << "\n";
-                                                    }
-                                                    size_t c = ++completed;
-                                                    {
-                                                        std::lock_guard<std::mutex> lock(console_mutex);
-                                                        std::stringstream ss;
-                                                        ss << "\33[2K\r[" << c << " / " << total << "] actions processed...";
-                                                        std::cerr << ss.str() << std::flush;
-                                                    }
-                                                                });
+                } catch (const std::exception& e) {
+                     StatusManager::Log("Exception in worker: " + std::string(e.what()));
+                }
+                size_t c = ++completed;
+                std::stringstream ss;
+                ss << "[" << c << " / " << total << "] actions processed...";
+                StatusManager::SetStatus(0, ss.str());
+            });
                     }
     }
     std::cerr << std::endl;
@@ -1222,6 +1239,7 @@ void _ensure_external_workspaces_link_exists() {
 // --- Main ---
 
 int main(int argc, char** argv) {
+    subprocess::SetStatusCallback(StatusManager::SetStatus);
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--no-cache") {
             g_disable_cache = true;

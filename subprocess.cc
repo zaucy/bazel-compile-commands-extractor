@@ -5,6 +5,7 @@
 #include <memory>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -17,7 +18,16 @@
 extern char **environ;
 #endif
 
+#include <atomic>
+
 namespace subprocess {
+
+static StatusCallback g_status_callback;
+static std::atomic<size_t> g_next_id{1};
+
+void SetStatusCallback(StatusCallback callback) {
+    g_status_callback = callback;
+}
 
 #ifdef _WIN32
 
@@ -121,6 +131,10 @@ RunResult Run(const std::vector<std::string>& command,
     // Given "maximally portable" without libraries, complex async I/O is hard.
     // I'll do a simple loop checking both. 
     
+    auto start_time = std::chrono::steady_clock::now();
+    bool long_running_logged = false;
+    size_t process_id = g_next_id++;
+
     while (true) {
         bool any_read = false;
         DWORD bytesAvail = 0;
@@ -142,6 +156,20 @@ RunResult Run(const std::vector<std::string>& command,
         }
 
         if (!any_read) {
+            auto now = std::chrono::steady_clock::now();
+            if (!long_running_logged && std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count() >= 5) {
+                 long_running_logged = true;
+                 std::string executable_name = command[0]; 
+                 size_t last_slash = executable_name.find_last_of("/\\");
+                 if (last_slash != std::string::npos) {
+                     executable_name = executable_name.substr(last_slash + 1);
+                 }
+                 if (executable_name.length() > 1 && executable_name[0] == '"' && executable_name.back() == '"') {
+                     executable_name = executable_name.substr(1, executable_name.length() - 2);
+                 }
+                 if (g_status_callback) g_status_callback(process_id, "External tool running: " + executable_name);
+            }
+
             if (WaitForSingleObject(piProcInfo.hProcess, 10) != WAIT_TIMEOUT) {
                 // Process finished. Read remaining.
                 while (ReadFile(hChildStd_OUT_Rd, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) stdout_str.append(chBuf, dwRead);
@@ -150,6 +178,8 @@ RunResult Run(const std::vector<std::string>& command,
             }
         }
     }
+
+    if (long_running_logged && g_status_callback) g_status_callback(process_id, "");
 
     DWORD exitCode;
     GetExitCodeProcess(piProcInfo.hProcess, &exitCode);
