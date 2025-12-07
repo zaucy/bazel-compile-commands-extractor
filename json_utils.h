@@ -7,6 +7,8 @@
 #include <memory>
 #include <variant>
 
+#include <set>
+
 // Minimal JSON parser for Bazel aquery output
 namespace json_utils {
 

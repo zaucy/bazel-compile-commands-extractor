@@ -730,7 +730,9 @@ GetFilesResult _get_files(json_utils::JsonValue& action) {
         }
     }
     
-    if (candidates.empty()) throw std::runtime_error("No source files found");
+    if (candidates.empty()) {
+        return {{}, {}, {"No compilation source files found in arguments."}};
+    }
     source_file = candidates[0];
     
     if (candidates.size() > 1) {
@@ -747,8 +749,7 @@ GetFilesResult _get_files(json_utils::JsonValue& action) {
     }
 
     if (!fs::exists(source_file)) {
-        // Warning...
-        return {{source_file}, {}, {}};
+        return {{source_file}, {}, {"Source file not found: " + source_file}};
     }
 
     // Check assembly
@@ -1108,11 +1109,16 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
                     const auto& headers = result.headers;
 
                     if (!result.warnings.empty()) {
+                        // Log warnings from _get_files (No source files found etc)
                         std::lock_guard<std::mutex> lock(console_mutex);
-                        std::cerr << "\33[2K\r";
-                        std::cerr << "Header search errors/warnings:\n";
+                        std::cerr << "\33[2K\r"; 
+                        std::cerr << "Warning (action skipped): ";
                         for(const auto& w : result.warnings) std::cerr << w << "\n";
                         std::cerr << std::flush;
+                    }
+                    
+                    if (sources.empty()) { // Skip if no sources found
+                        return; // return from lambda, don't process this action
                     }
                     
                     // Get args
