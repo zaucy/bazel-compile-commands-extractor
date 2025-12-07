@@ -18,6 +18,8 @@
 #include <queue>
 #include <chrono>
 #include <functional>
+#include <atomic>
+#include <iomanip>
 
 namespace fs = std::filesystem;
 
@@ -457,6 +459,7 @@ bool _is_nvcc(const std::string& path) {
 struct GetHeadersResult {
     std::set<std::string> headers;
     bool should_cache;
+    std::vector<std::string> warnings;
 };
 
 GetHeadersResult _get_headers_gcc(const json_utils::JsonValue& action, const std::string& source_path, const std::string& action_key) {
@@ -588,16 +591,13 @@ GetHeadersResult _get_headers_msvc(const json_utils::JsonValue& action, const st
             }
         }
         if (!matched) {
+            // Suppress annoying warning about -Xclang on Windows
+            if (line.find("D9002 : ignoring unknown option '-Xclang'") != std::string::npos) continue;
             error_lines.push_back(line);
             if (line.find("fatal error C1083:") != std::string::npos) error = true;
         }
     }
-    if (!error_lines.empty()) {
-         std::cerr << "Header search errors/warnings:" << std::endl;
-         for(const auto& l : error_lines) std::cerr << l << std::endl;
-    }
-
-    return {headers, !error};
+    return {headers, !error, error_lines};
 }
 
 bool _file_is_in_main_workspace_and_not_external(const std::string& file_str) {
@@ -609,9 +609,9 @@ bool _file_is_in_main_workspace_and_not_external(const std::string& file_str) {
     return true;
 }
 
-std::set<std::string> _get_headers(const json_utils::JsonValue& action, const std::string& source_path) {
+GetHeadersResult _get_headers(const json_utils::JsonValue& action, const std::string& source_path) {
     std::string exclude = RefreshConfig::GetExcludeHeaders();
-    if (exclude == "all") return {};
+    if (exclude == "all") return {{}, false, {}};
     
     // "external" check needs is_external from action... not parsed yet?
     // Assuming action is passed as JSON.
@@ -647,7 +647,7 @@ std::set<std::string> _get_headers(const json_utils::JsonValue& action, const st
                          for (const auto& h : headers) {
                              if (_get_cached_adjusted_modified_time(h) > cache_time) { fresh = false; break; }
                          }
-                         if (fresh) return headers;
+                         if (fresh) return {headers, true, {}};
                      }
                 }
             } catch (...) {}
@@ -659,7 +659,7 @@ std::set<std::string> _get_headers(const json_utils::JsonValue& action, const st
     if (compiler.length() >= 6 && compiler.substr(compiler.length()-6) == "cl.exe") {
         result = _get_headers_msvc(action, source_path);
     } else if (compiler.find("ml.exe") != std::string::npos || compiler.find("ml64.exe") != std::string::npos) {
-        result = {{}, false};
+        result = {{}, false, {}};
     } else {
         result = _get_headers_gcc(action, source_path, actionKey);
     }
@@ -681,14 +681,20 @@ std::set<std::string> _get_headers(const json_utils::JsonValue& action, const st
         for (const auto& h : result.headers) {
             if (_file_is_in_main_workspace_and_not_external(h)) filtered.insert(h);
         }
-        return filtered;
+        return {filtered, result.should_cache, result.warnings};
     }
-    return result.headers;
+    return result;
 }
 
 // --- File Identification ---
 
-std::pair<std::set<std::string>, std::set<std::string>> _get_files(json_utils::JsonValue& action) {
+struct GetFilesResult {
+    std::set<std::string> sources;
+    std::set<std::string> headers;
+    std::vector<std::string> warnings;
+};
+
+GetFilesResult _get_files(json_utils::JsonValue& action) {
     auto& args_json = action.as_object().at("arguments").as_array();
     std::vector<std::string> args;
     for(const auto& v : args_json) args.push_back(v.string_val);
@@ -723,14 +729,15 @@ std::pair<std::set<std::string>, std::set<std::string>> _get_files(json_utils::J
 
     if (!fs::exists(source_file)) {
         // Warning...
-        return {{source_file}, {}};
+        return {{source_file}, {}, {}};
     }
 
     // Check assembly
     std::string ext = fs::path(source_file).extension().string();
-    if (ext == ".s" || ext == ".asm") return {{source_file}, {}};
+    if (ext == ".s" || ext == ".asm") return {{source_file}, {}, {}};
 
-    auto headers = _get_headers(action, source_file);
+    auto result = _get_headers(action, source_file);
+    auto headers = result.headers;
 
     // Language flag fix
     if (headers.size() > 0) {
@@ -751,7 +758,7 @@ std::pair<std::set<std::string>, std::set<std::string>> _get_files(json_utils::J
         }
     }
 
-    return {{source_file}, headers};
+    return {{source_file}, headers, result.warnings};
 }
 
 // --- Platform Patches ---
@@ -1051,10 +1058,13 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
     auto& actions = aquery_output.as_object().at("actions").as_array();
     
     std::mutex entries_mutex;
+    std::mutex console_mutex;
     std::string workspace_dir = fs::current_path().string(); // assumes CWD is workspace root
 
     {
         ThreadPool pool(std::min(32u, std::thread::hardware_concurrency() + 4));
+        std::atomic<size_t> completed{0};
+        size_t total = actions.size();
         for (size_t i = 0; i < actions.size(); ++i) {
             pool.enqueue([&, i] {
                 // Copy action to modify
@@ -1075,7 +1085,17 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
                     // We treat input as const.
                     json_utils::JsonValue action_copy = actions[i]; // Shallow copy
                     
-                    auto [sources, headers] = _get_files(action_copy);
+                    auto result = _get_files(action_copy);
+                    const auto& sources = result.sources;
+                    const auto& headers = result.headers;
+
+                    if (!result.warnings.empty()) {
+                        std::lock_guard<std::mutex> lock(console_mutex);
+                        std::cerr << "\33[2K\r";
+                        std::cerr << "Header search errors/warnings:\n";
+                        for(const auto& w : result.warnings) std::cerr << w << "\n";
+                        std::cerr << std::flush;
+                    }
                     
                     // Get args
                     std::vector<std::string> args;
@@ -1097,12 +1117,22 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
                     // We can collect all outputs then filter.
                     for (const auto& s : sources) entries.push_back({s, args, workspace_dir});
                     for (const auto& h : headers) entries.push_back({h, args, workspace_dir});
-                } catch (const std::exception& e) {
-                     std::cerr << "Exception in worker: " << e.what() << std::endl;
-                }
-            });
-        }
+                                                    } catch (const std::exception& e) {
+                                                         std::lock_guard<std::mutex> lock(console_mutex);
+                                                         std::cerr << "\33[2K\r";
+                                                         std::cerr << "Exception in worker: " << e.what() << "\n";
+                                                    }
+                                                    size_t c = ++completed;
+                                                    {
+                                                        std::lock_guard<std::mutex> lock(console_mutex);
+                                                        std::stringstream ss;
+                                                        ss << "\33[2K\r[" << c << " / " << total << "] actions processed...";
+                                                        std::cerr << ss.str() << std::flush;
+                                                    }
+                                                                });
+                    }
     }
+    std::cerr << std::endl;
     
     // Destructor of pool waits for all.
     return entries;
@@ -1168,6 +1198,7 @@ void _ensure_external_workspaces_link_exists() {
 
 int main(int argc, char** argv) {
     try {
+        auto start_time = std::chrono::high_resolution_clock::now();
         // ensure cwd
         if (const char* env_p = std::getenv("BUILD_WORKSPACE_DIRECTORY")) {
             fs::current_path(env_p);
@@ -1255,6 +1286,10 @@ int main(int argc, char** argv) {
             out << "  }" << (i < unique_entries.size() - 1 ? "," : "") << "\n";
         }
         out << "]\n";
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = end_time - start_time;
+        std::cout << "Generated compile_commands.json in " << std::fixed << std::setprecision(2) << elapsed.count() << "s" << std::endl;
 
     } catch (const std::exception& e) {
         log_error(std::string("Fatal error: ") + e.what());
