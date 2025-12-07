@@ -23,6 +23,8 @@
 
 namespace fs = std::filesystem;
 
+std::mutex console_mutex;
+
 // --- Constants & Globals ---
 
 // Hardcoded NVCC flags from refresh.template.py
@@ -574,6 +576,15 @@ GetHeadersResult _get_headers_msvc(const json_utils::JsonValue& action, const st
         "Примечание: включение файла: ", "Not: eklenen dosya: ", "Nota: inclusión del archivo:"
     };
 
+    // Scan for -Xclang and following arg to suppress warnings
+    std::set<std::string> ignored_flags;
+    ignored_flags.insert("-Xclang");
+    for (size_t i = 0; i < header_cmd.size(); ++i) {
+        if (header_cmd[i] == "-Xclang" && i + 1 < header_cmd.size()) {
+            ignored_flags.insert(header_cmd[i+1]);
+        }
+    }
+
     bool error = false;
     std::vector<std::string> error_lines;
     while(std::getline(ss, line)) {
@@ -591,8 +602,16 @@ GetHeadersResult _get_headers_msvc(const json_utils::JsonValue& action, const st
             }
         }
         if (!matched) {
-            // Suppress annoying warning about -Xclang on Windows
-            if (line.find("D9002 : ignoring unknown option '-Xclang'") != std::string::npos) continue;
+            if (line.find("D9002 : ignoring unknown option '") != std::string::npos) {
+                 bool ignored = false;
+                 for (const auto& f : ignored_flags) {
+                     if (line.find("'" + f + "'") != std::string::npos) {
+                         ignored = true; 
+                         break; 
+                     }
+                 }
+                 if (ignored) continue;
+            }
             error_lines.push_back(line);
             if (line.find("fatal error C1083:") != std::string::npos) error = true;
         }
@@ -1058,7 +1077,6 @@ std::vector<CommandEntry> _convert_compile_commands(const json_utils::JsonValue&
     auto& actions = aquery_output.as_object().at("actions").as_array();
     
     std::mutex entries_mutex;
-    std::mutex console_mutex;
     std::string workspace_dir = fs::current_path().string(); // assumes CWD is workspace root
 
     {

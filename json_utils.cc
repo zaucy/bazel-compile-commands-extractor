@@ -168,20 +168,20 @@ void dump_value(const JsonValue& val, std::stringstream& ss, int indent, int lev
         case JsonType::Number: ss << val.number_val; break; // simplistic, might lose precision
         case JsonType::String: dump_string(val.string_val, ss); break;
         case JsonType::Array: {
-            ss << "[\\n";
+            ss << "[\n";
             const auto& arr = *val.array_val;
             for (size_t i = 0; i < arr.size(); ++i) {
                 for (int j = 0; j < (level + 1) * indent; ++j) ss << ' ';
                 dump_value(arr[i], ss, indent, level + 1);
                 if (i < arr.size() - 1) ss << ",";
-                ss << "\\n";
+                ss << "\n";
             }
             for (int j = 0; j < level * indent; ++j) ss << ' ';
             ss << "]";
             break;
         }
         case JsonType::Object: {
-            ss << "{\\n";
+            ss << "{\n";
             const auto& obj = *val.object_val;
             size_t i = 0;
             for (const auto& kv : obj) {
@@ -190,7 +190,7 @@ void dump_value(const JsonValue& val, std::stringstream& ss, int indent, int lev
                 ss << ": ";
                 dump_value(kv.second, ss, indent, level + 1);
                 if (i < obj.size() - 1) ss << ",";
-                ss << "\\n";
+                ss << "\n";
                 i++;
             }
             for (int j = 0; j < level * indent; ++j) ss << ' ';

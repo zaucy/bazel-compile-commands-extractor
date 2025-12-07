@@ -22,10 +22,16 @@ cc_library(
 # Target with error to test robustness
 
 cc_library(
+
     name = "error_target",
+
     srcs = ["error.cc"],
-    copts = ["-Xclang"],  # This flag causes D9002 warning on MSVC
+
+    copts = ["-Xclang", "-foo"], # This flag causes D9002 warning on MSVC
+
 )
+
+
 
 refresh_compile_commands(
     name = "refresh_my_targets",
