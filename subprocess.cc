@@ -170,7 +170,7 @@ RunResult Run(const std::vector<std::string>& command,
             if (!long_running_logged && std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count() >= 5) {
                  long_running_logged = true;
                  std::string executable_name = command[0]; 
-                 size_t last_slash = executable_name.find_last_of("/\\");
+                 size_t last_slash = executable_name.find_last_of("/\\\\");
                  if (last_slash != std::string::npos) {
                      executable_name = executable_name.substr(last_slash + 1);
                  }

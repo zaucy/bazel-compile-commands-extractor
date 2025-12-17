@@ -94,8 +94,15 @@ struct Parser {
                 else if (escape == 'r') s += '\r';
                 else if (escape == 't') s += '\t';
                 else if (escape == 'u') {
-                    // minimal unicode support (skip 4 chars)
+                    if (pos + 4 > str.size()) throw std::runtime_error("Unterminated unicode escape");
+                    std::string hex = str.substr(pos, 4);
                     pos += 4;
+                    try {
+                        int c_val = std::stoi(hex, nullptr, 16);
+                        s += static_cast<char>(c_val);
+                    } catch (const std::invalid_argument& e) {
+                        throw std::runtime_error("Invalid unicode escape: " + hex);
+                    }
                 }
             } else {
                 s += c;
