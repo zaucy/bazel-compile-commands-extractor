@@ -41,18 +41,37 @@ RunResult Run(const std::vector<std::string>& command,
     std::string cmd_line;
     for (const auto& arg : command) {
         if (!cmd_line.empty()) cmd_line += " ";
-        // Basic escaping for Windows cmd
-        if (arg.find(' ') != std::string::npos || arg.empty()) {
-            cmd_line += "\"";
-            for (char c : arg) {
-                if (c == '"') cmd_line += "\\\"";
-                else if (c == '\\') cmd_line += "\\\\"; // Double backslashes? Windows quoting is a mess.
-                else cmd_line += c;
+        
+        // Standard Windows escaping algorithm
+        bool need_quote = arg.empty() || arg.find_first_of(" \t\"") != std::string::npos;
+        if (need_quote) cmd_line += "\"";
+        
+        std::string bs_buf;
+        for (char c : arg) {
+            if (c == '\\') {
+                bs_buf += c;
+            } else if (c == '"') {
+                cmd_line += std::string(bs_buf.size() * 2, '\\');
+                cmd_line += "\\\"";
+                bs_buf.clear();
+            } else {
+                if (!bs_buf.empty()) {
+                    cmd_line += bs_buf;
+                    bs_buf.clear();
+                }
+                cmd_line += c;
             }
-            cmd_line += "\"";
-        } else {
-            cmd_line += arg;
         }
+        
+        if (!bs_buf.empty()) {
+            if (need_quote) {
+                cmd_line += std::string(bs_buf.size() * 2, '\\');
+            } else {
+                cmd_line += bs_buf;
+            }
+        }
+        
+        if (need_quote) cmd_line += "\"";
     }
 
     // Environment block

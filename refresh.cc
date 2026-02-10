@@ -438,11 +438,9 @@ std::string windows_list2cmdline(const std::vector<std::string>& args) {
     std::string result;
     for (const auto& arg : args) {
         if (!result.empty()) result += " ";
-        std::string q_arg = arg;
-        bool need_quote = arg.empty() || arg.find_first_of(" \t") != std::string::npos;
-        if (need_quote) {
-            result += "\"";
-        }
+        
+        bool need_quote = arg.empty() || arg.find_first_of(" \t\"") != std::string::npos;
+        if (need_quote) result += "\"";
         
         std::string bs_buf;
         for (char c : arg) {
@@ -450,8 +448,8 @@ std::string windows_list2cmdline(const std::vector<std::string>& args) {
                 bs_buf += c;
             } else if (c == '"') {
                 result += std::string(bs_buf.size() * 2, '\\');
-                bs_buf.clear();
                 result += "\\\"";
+                bs_buf.clear();
             } else {
                 if (!bs_buf.empty()) {
                     result += bs_buf;
@@ -460,13 +458,16 @@ std::string windows_list2cmdline(const std::vector<std::string>& args) {
                 result += c;
             }
         }
-        if (!bs_buf.empty()) result += bs_buf;
         
-        if (need_quote) {
-            result += std::string(bs_buf.size(), '\\'); // This logic in python seems to duplicate bs if at end?
-            // Python: result.extend(bs_buf); result.append('"')
-            result += "\"";
+        if (!bs_buf.empty()) {
+            if (need_quote) {
+                result += std::string(bs_buf.size() * 2, '\\');
+            } else {
+                result += bs_buf;
+            }
         }
+        
+        if (need_quote) result += "\"";
     }
     return result;
 }
@@ -1097,8 +1098,15 @@ std::vector<std::string> _nvcc_patch(std::vector<std::string> args) {
         
         if (_nvcc_rewrite_flags.count(option)) {
             std::string mapped = _nvcc_rewrite_flags.at(option);
-            if (pos != std::string::npos) arg = mapped + "=" + remainder;
-            else arg = mapped;
+            if (pos != std::string::npos) {
+                if (mapped == "-D" || mapped == "-I" || mapped == "-L" || mapped == "-U") {
+                    arg = mapped + remainder;
+                } else {
+                    arg = mapped + "=" + remainder;
+                }
+            } else {
+                arg = mapped;
+            }
         }
         
         // Comma separation logic... skip for now, assume simple case

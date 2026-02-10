@@ -130,7 +130,9 @@ def _gen_refresh_config_impl(ctx):
 
     content += "const std::vector<std::pair<std::string, std::string>> target_flag_pairs_vec = {\n"
     for target, flags in ctx.attr.labels_to_flags.items():
-        content += '    {{"{}", "{}"}},\n'.format(target, flags)
+        escaped_target = target.replace("\\", "\\\\").replace("\"", "\\\"")
+        escaped_flags = flags.replace("\\", "\\\\").replace("\"", "\\\"")
+        content += '    {{"{}", "{}"}},\n'.format(escaped_target, escaped_flags)
     content += "};\n"
     content += "const std::vector<std::pair<std::string, std::string>>& RefreshConfig::GetTargetFlagPairs() { return target_flag_pairs_vec; }\n\n"
 
