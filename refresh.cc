@@ -1280,7 +1280,14 @@ int main(int argc, char** argv) {
             while (ss >> s) cmd.push_back(s);
             
             auto res = subprocess::Run(cmd);
-            
+            if (res.return_code != 0) {
+                log_error("Bazel aquery failed for " + target + " with exit code " + std::to_string(res.return_code));
+                log_error("--- STDERR ---");
+                log_error(res.stderr_output);
+                log_error("--- END STDERR ---");
+                continue;
+            }
+
             try {
                 auto json = json_utils::Parse(res.stdout_output);
                 if (json.type == json_utils::JsonType::Object && json.as_object().count("actions")) {
@@ -1289,9 +1296,11 @@ int main(int argc, char** argv) {
                 auto entries = _convert_compile_commands(json);
                 all_entries.insert(all_entries.end(), entries.begin(), entries.end());
             } catch (const std::exception& e) {
-                log_warning("Failed to parse/process aquery output for " + target + ": " + e.what());
-            }
-            
+                log_error("Failed to parse/process aquery output for " + target + ": " + e.what());
+                log_error("--- RAW STDOUT ---");
+                log_error(res.stdout_output);
+                log_error("--- END RAW STDOUT ---");
+            }            
             log_success("Finished extracting commands for " + target);
         }
 
