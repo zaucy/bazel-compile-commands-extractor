@@ -36,7 +36,7 @@ def _force_opt_binary_impl(ctx):
             executable = ctx.outputs.executable,
             files = depset([ctx.outputs.executable]),
             runfiles = actual_binary[DefaultInfo].default_runfiles,
-        )
+        ),
     ]
 
 _force_opt_binary = rule(
@@ -81,7 +81,7 @@ def refresh_compile_commands(
     )
 
     raw_binary_name = name + "_raw"
-    
+
     cc_binary(
         name = raw_binary_name,
         srcs = [
@@ -93,7 +93,7 @@ def refresh_compile_commands(
         ],
         data = ["@hedron_compile_commands//:print_args"],
         copts = select({
-            "@bazel_tools//src/conditions:windows": ["/std:c++17"],
+            "@rules_cc//cc/compiler:msvc-cl": ["/std:c++17"],
             "//conditions:default": ["-std=c++17"],
         }),
         **kwargs
