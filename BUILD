@@ -9,18 +9,15 @@ refresh_compile_commands(
     name = "refresh_all",
 )
 
-
 # Stardoc users only: Depend on "@hedron_compile_commands//:bzl_srcs_for_stardoc" as needed.
 # Why? Stardoc requires all loaded files to be listed as deps; without this we'd prevent users from running Stardoc on their code when they load from this tool in, e.g., their own workspace.bzl or wrapping macros.
 filegroup(
     name = "bzl_srcs_for_stardoc",
-    visibility = ["//visibility:public"],
     srcs = glob(["**/*.bzl"]) + [
         "@bazel_tools//tools:bzl_srcs",
     ],
+    visibility = ["//visibility:public"],
 )
-
-
 
 ########################################
 # Implementation:
@@ -32,24 +29,31 @@ exports_files([
 
 cc_library(
     name = "refresh_lib",
-    srcs = ["json_utils.cc", "subprocess.cc"],
-    hdrs = ["json_utils.h", "subprocess.h", "refresh.h"],
-    strip_include_prefix = ".",
-    visibility = ["//visibility:public"],
+    srcs = [
+        "json_utils.cc",
+        "subprocess.cc",
+    ],
+    hdrs = [
+        "json_utils.h",
+        "refresh.h",
+        "subprocess.h",
+    ],
     copts = select({
-        "@bazel_tools//src/conditions:windows": ["/std:c++17"],
+        "@rules_cc//cc/compiler:msvc-cl": ["/std:c++17"],
         "//conditions:default": ["-std=c++17"],
     }),
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
 )
 
 cc_binary(
     name = "nvcc_clang_diff",
     srcs = ["nvcc_clang_diff.cc"],
-    deps = [":refresh_lib"],
     copts = select({
-        "@bazel_tools//src/conditions:windows": ["/std:c++17"],
+        "@rules_cc//cc/compiler:msvc-cl": ["/std:c++17"],
         "//conditions:default": ["-std=c++17"],
     }),
+    deps = [":refresh_lib"],
 )
 
 cc_binary(
